@@ -108,13 +108,6 @@ Ports:
 - Backend API: `http://localhost:3000`
 - Frontend: `http://localhost:5173`
 
-For EC2/public deployment, set the frontend API URL before build:
-
-```bash
-export VITE_API_BASE=http://<your-ec2-public-dns-or-ip>:3000
-docker compose up --build -d
-```
-
 The compose setup mounts `/var/run/docker.sock` into backend so `dockerode` can create runner containers.
 
 ## React Frontend

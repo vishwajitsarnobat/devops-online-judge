@@ -158,7 +158,7 @@ app.post('/api/submit', async (req, res) => {
         } else {
             const { results } = executionData;
             // Since execution halts on TLE/RE/WA, the last result dictates failure, 
-            // or if we stopped early, then a failure must have occurred.
+            // or if we stopped early, then it is runtime failure before even results.
             if (results && results.length > 0) {
                 const lastStatus = results[results.length - 1].status;
                 if (lastStatus !== 'AC') {

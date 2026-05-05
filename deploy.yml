@@ -1,46 +1,45 @@
 ---
-- name: Deploy online-judge on EC2
-  hosts: aws_ec2
+- name: Deploy online-judge locally
+  hosts: local
   become: true
   vars:
-    app_dir: /home/ubuntu/online-judge
-    repo_url: https://github.com/paramsj/devops-oj.git
+    app_dir: /home/vishwajit/online-judge
+    deploy_user: vishwajit
+    repo_url: https://github.com/vishwajitsarnobat/devops-online-judge.git
     repo_branch: main
 
   tasks:
-    - name: Gather installed package facts
-      package_facts:
-        manager: auto
-
     - name: Ensure base packages are present
-      apt:
+      dnf:
         name:
           - git
-          - docker-compose-plugin
+          - podman
+          - podman-docker
+          - podman-compose
           - python3
         state: present
-        update_cache: true
 
-    - name: Ensure docker.io is present when containerd.io is not installed
-      apt:
-        name: docker.io
-        state: present
-      when: "'containerd.io' not in ansible_facts.packages"
-
-    - name: Ensure docker service is running
-      service:
-        name: docker
-        state: started
+    - name: Ensure Podman socket is enabled for deploy user
+      become: true
+      become_user: "{{ deploy_user }}"
+      systemd:
+        name: podman.socket
+        scope: user
         enabled: true
+        state: started
 
-    - name: Ensure ubuntu user can access Docker
-      user:
-        name: ubuntu
-        groups: docker
-        append: true
+    - name: Ensure Docker socket symlink exists
+      file:
+        src: "/run/user/{{ deploy_user_uid }}/podman/podman.sock"
+        dest: /var/run/docker.sock
+        state: link
+        force: true
+      vars:
+        deploy_user_uid: "{{ ansible_facts['user_uid'] | default(1000) }}"
 
     - name: Pull latest code from GitHub
-      become: false
+      become: true
+      become_user: "{{ deploy_user }}"
       git:
         repo: "{{ repo_url }}"
         dest: "{{ app_dir }}"
@@ -51,15 +50,35 @@
       copy:
         src: ./.env
         dest: "{{ app_dir }}/.env"
-        owner: ubuntu
-        group: ubuntu
+        owner: "{{ deploy_user }}"
+        group: "{{ deploy_user }}"
         mode: '0600'
 
-    - name: Start application with Docker Compose
+    - name: Pull runtime images
+      become: true
+      become_user: "{{ deploy_user }}"
+      command: "podman pull docker.io/library/{{ item }}"
+      loop:
+        - python:3.10-slim
+        - gcc:latest
+      changed_when: true
+
+    - name: Stop existing containers
+      become: true
+      become_user: "{{ deploy_user }}"
+      shell: |
+        cd "{{ app_dir }}"
+        podman-compose down || true
+      args:
+        executable: /bin/bash
+      ignore_errors: true
+
+    - name: Start application with Podman Compose
+      become: true
+      become_user: "{{ deploy_user }}"
       shell: |
         set -e
         cd "{{ app_dir }}"
-        docker compose down
-        docker compose up --build -d
+        podman-compose up --build -d
       args:
         executable: /bin/bash
