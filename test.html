@@ -1,0 +1,275 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <title>RCE Tester</title>
+    <style>
+        body {
+            font-family: sans-serif;
+            max-width: 800px;
+            margin: 40px auto;
+            background: #f4f4f4;
+        }
+
+        .card {
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+        }
+
+        textarea,
+        select {
+            width: 100%;
+            box-sizing: border-box;
+            margin: 5px 0 15px;
+            font-family: monospace;
+            padding: 10px;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+        }
+
+        pre {
+            background: #1e1e1e;
+            color: #fff;
+            padding: 15px;
+            border-radius: 4px;
+            overflow-x: auto;
+            white-space: pre-wrap;
+            font-size: 14px;
+        }
+
+        .problem-statement {
+            background: #fafafa;
+            border: 1px solid #e5e5e5;
+            border-radius: 6px;
+            padding: 12px;
+            white-space: pre-wrap;
+            line-height: 1.5;
+        }
+
+        .sample-case {
+            border: 1px solid #ddd;
+            border-radius: 6px;
+            padding: 10px;
+            margin-bottom: 10px;
+            background: #fff;
+        }
+
+        .sample-case h4 {
+            margin: 0 0 8px;
+            font-size: 14px;
+        }
+
+        .sample-case pre {
+            margin: 0;
+            background: #121212;
+            font-size: 13px;
+        }
+
+        button {
+            padding: 10px 15px;
+            margin-right: 10px;
+            cursor: pointer;
+            background: #007bff;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            font-weight: bold;
+        }
+
+        button:hover {
+            background: #0056b3;
+        }
+
+        button.submit-btn {
+            background: #28a745;
+        }
+
+        button.submit-btn:hover {
+            background: #218838;
+        }
+    </style>
+</head>
+
+<body>
+    <h2> Simple Online Judge </h2>
+    <p><a href="./admin.html">Open Admin Page (Create Problems/Testcases)</a></p>
+
+    <div class="card">
+        <h3>1. Select a Problem</h3>
+        <select id="prob">
+            <option value="">Loading problems from database...</option>
+        </select>
+    </div>
+
+    <div class="card">
+        <h3>Problem Statement</h3>
+        <div id="statement" class="problem-statement">Select a problem to view its statement.</div>
+    </div>
+
+    <div class="card">
+        <h3>Sample Test Cases</h3>
+        <div id="samples">Select a problem to load sample test cases.</div>
+    </div>
+
+    <div class="card">
+        <h3>2. Write Solution</h3>
+        <label><strong>Language:</strong></label>
+        <select id="lang">
+            <option value="python">Python 3</option>
+            <option value="cpp">C++ (GCC)</option>
+        </select>
+
+        <label><strong>Code Editor:</strong></label>
+        <textarea id="code" rows="12">import sys
+# Base starter code - prints exactly what it receives
+data = sys.stdin.read()
+print(data.strip())</textarea>
+
+        <button onclick="exec('/api/execute')">▶ Run Code (Samples Only)</button>
+        <button class="submit-btn" onclick="exec('/api/submit')">☁ Submit Solution (All Cases)</button>
+    </div>
+
+    <div class="card">
+        <h3>3. Execution Results</h3>
+        <pre id="out">Waiting for code to run...</pre>
+    </div>
+
+    <script>
+        let problemsById = new Map();
+
+        // Automatically fetch problems on page load
+        async function loadProblems() {
+            try {
+                const r = await fetch('http://localhost:3000/api/problems');
+                const data = await r.json();
+                const select = document.getElementById('prob');
+
+                if (data.length === 0) {
+                    select.innerHTML = '<option value="">No problems found in Supabase Database!</option>';
+                    document.getElementById('statement').innerText = 'No problem statement available.';
+                    document.getElementById('samples').innerText = 'No sample test cases available.';
+                    return;
+                }
+
+                problemsById = new Map(data.map(p => [p.id, p]));
+                select.innerHTML = data.map(p => `<option value="${p.id}">${p.title}</option>`).join('');
+                document.getElementById('out').innerText = `Successfully loaded ${data.length} problems!`;
+                await onProblemChange();
+            } catch (e) {
+                document.getElementById('out').innerText = `Fetch Error: ${e.message}\n(Did you restart your 'npm start' command after I updated server.js?)`;
+            }
+        }
+
+        async function loadSampleTestcases(problemId) {
+            const samplesBox = document.getElementById('samples');
+            samplesBox.innerText = 'Loading sample test cases...';
+
+            try {
+                const r = await fetch(`http://localhost:3000/api/problems/${problemId}/sample-testcases`);
+                const contentType = r.headers.get('content-type') || '';
+
+                if (!r.ok) {
+                    const bodyText = await r.text();
+                    const hint = bodyText.includes('Cannot GET')
+                        ? 'Endpoint missing on running server. Restart backend to load latest routes.'
+                        : bodyText.slice(0, 120);
+                    samplesBox.innerText = `Could not load sample test cases (HTTP ${r.status}). ${hint}`;
+                    return;
+                }
+
+                if (!contentType.includes('application/json')) {
+                    const bodyText = await r.text();
+                    samplesBox.innerText = `Could not load sample test cases: expected JSON, got ${contentType || 'unknown type'} (${bodyText.slice(0, 120)})`;
+                    return;
+                }
+
+                const testcases = await r.json();
+
+                if (!Array.isArray(testcases) || testcases.length === 0) {
+                    samplesBox.innerText = 'No sample test cases available for this problem.';
+                    return;
+                }
+
+                samplesBox.innerHTML = testcases.map((tc, idx) => `
+                    <div class="sample-case">
+                        <h4>Sample #${idx + 1}</h4>
+                        <p><strong>Input:</strong></p>
+                        <pre>${escapeHtml(tc.input || '')}</pre>
+                        <p><strong>Expected Output:</strong></p>
+                        <pre>${escapeHtml(tc.expected_output || '')}</pre>
+                    </div>
+                `).join('');
+            } catch (e) {
+                samplesBox.innerText = `Could not load sample test cases: ${e.message}`;
+            }
+        }
+
+        function escapeHtml(text) {
+            return text
+                .replaceAll('&', '&amp;')
+                .replaceAll('<', '&lt;')
+                .replaceAll('>', '&gt;')
+                .replaceAll('"', '&quot;')
+                .replaceAll("'", '&#39;');
+        }
+
+        async function onProblemChange() {
+            const problemId = document.getElementById('prob').value;
+            const statementBox = document.getElementById('statement');
+
+            if (!problemId) {
+                statementBox.innerText = 'Select a problem to view its statement.';
+                document.getElementById('samples').innerText = 'Select a problem to load sample test cases.';
+                return;
+            }
+
+            const problem = problemsById.get(problemId);
+            statementBox.innerText = problem && problem.description
+                ? problem.description
+                : 'No description available for this problem.';
+
+            await loadSampleTestcases(problemId);
+        }
+
+        // Function to run or submit code
+        async function exec(url) {
+            const problemId = document.getElementById('prob').value;
+            const outBox = document.getElementById('out');
+
+            if (!problemId) {
+                outBox.innerText = "Please select a valid problem first!";
+                return;
+            }
+
+            outBox.innerText = "Running code in isolated Docker container...";
+
+            try {
+                const r = await fetch('http://localhost:3000' + url, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        problem_id: problemId,
+                        language: document.getElementById('lang').value,
+                        code: document.getElementById('code').value,
+                        user_id: null
+                    })
+                });
+
+                const result = await r.json();
+                outBox.innerText = JSON.stringify(result, null, 2);
+            } catch (e) {
+                outBox.innerText = "Execution failed: " + e.message;
+            }
+        }
+
+        // Trigger load on start
+        document.getElementById('prob').addEventListener('change', onProblemChange);
+        loadProblems();
+    </script>
+</body>
+
+</html>
