@@ -24,7 +24,7 @@ export default function AdminView() {
 
   useEffect(() => {
     loadProblems();
-  }, []);
+  }, [apiBase]);
 
   async function parseResponse(response) {
     const text = await response.text();

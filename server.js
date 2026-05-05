@@ -8,15 +8,20 @@ dotenv.config();
 const app = express();
 app.use(express.json());
 
-// Enable CORS for testing from our HTML file
+// Enable CORS for frontend development
 app.use((req, res, next) => {
     res.header("Access-Control-Allow-Origin", "*");
     res.header("Access-Control-Allow-Headers", "Origin, X-Requested-With, Content-Type, Accept");
     if (req.method === 'OPTIONS') {
-        res.header("Access-Control-Allow-Methods", "POST");
+        res.header("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
         return res.sendStatus(200);
     }
     next();
+});
+
+// Health check endpoint for container orchestration
+app.get('/health', (req, res) => {
+    res.status(200).json({ status: 'OK', message: 'Judge-it Backend is live' });
 });
 
 const supabaseUrl = process.env.SUPABASE_URL;

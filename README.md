@@ -117,9 +117,9 @@ docker compose up --build -d
 
 The compose setup mounts `/var/run/docker.sock` into backend so `dockerode` can create runner containers.
 
-## React Frontend (New)
+## React Frontend
 
-The old HTML pages are now ported into a React app under [frontend](frontend).
+The frontend is a React app built with Vite, located under [frontend](frontend).
 
 1. Install frontend dependencies:
 ```bash
