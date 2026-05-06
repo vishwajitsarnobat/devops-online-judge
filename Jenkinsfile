@@ -44,50 +44,7 @@ pipeline {
         }
 
         // ================================================================
-        // Stage 3: Build Docker Images
-        // Each image gets two tags:
-        //   - BUILD_NUMBER (e.g. :42) — for rollback to specific version
-        //   - latest — for convenience
-        // ================================================================
-        stage('Build Docker Images') {
-            steps {
-                sh """
-                    docker build \
-                        -t ${DOCKER_USER}/online-judge-backend:${IMAGE_TAG} \
-                        -t ${DOCKER_USER}/online-judge-backend:latest \
-                        .
-
-                    docker build \
-                        -t ${DOCKER_USER}/online-judge-frontend:${IMAGE_TAG} \
-                        -t ${DOCKER_USER}/online-judge-frontend:latest \
-                        --build-arg VITE_API_BASE=http://\$(cd terraform && terraform output -raw ec2_public_ip 2>/dev/null || echo localhost):3000 \
-                        ./frontend
-                """
-            }
-        }
-
-        // ================================================================
-        // Stage 4: Push to Docker Hub
-        // Uses the dockerhub-creds credential (username/password type).
-        // DOCKERHUB_USR and DOCKERHUB_PSW are auto-created by Jenkins
-        // from the credentials() binding above.
-        // ================================================================
-        stage('Push to Docker Hub') {
-            steps {
-                sh """
-                    echo "${DOCKERHUB_PSW}" | docker login -u "${DOCKERHUB_USR}" --password-stdin
-
-                    docker push ${DOCKER_USER}/online-judge-backend:${IMAGE_TAG}
-                    docker push ${DOCKER_USER}/online-judge-backend:latest
-
-                    docker push ${DOCKER_USER}/online-judge-frontend:${IMAGE_TAG}
-                    docker push ${DOCKER_USER}/online-judge-frontend:latest
-                """
-            }
-        }
-
-        // ================================================================
-        // Stage 5: Terraform — create/update AWS infrastructure
+        // Stage 3: Terraform — create/update AWS infrastructure
         // terraform init connects to S3 backend.
         // terraform apply creates the EC2 instance (or does nothing if
         // it already exists — idempotent).
@@ -105,6 +62,55 @@ pipeline {
                         terraform apply -auto-approve -input=false
                     """
                 }
+            }
+        }
+
+        // ================================================================
+        // Stage 4: Build Docker Images
+        // Each image gets two tags:
+        //   - BUILD_NUMBER (e.g. :42) — for rollback to specific version
+        //   - latest — for convenience
+        // ================================================================
+        stage('Build Docker Images') {
+            steps {
+                withEnv([
+                    "AWS_ACCESS_KEY_ID=${AWS_CREDS_USR}",
+                    "AWS_SECRET_ACCESS_KEY=${AWS_CREDS_PSW}",
+                    "AWS_DEFAULT_REGION=ap-south-1"
+                ]) {
+                    sh """
+                        docker build \
+                            -t ${DOCKER_USER}/online-judge-backend:${IMAGE_TAG} \
+                            -t ${DOCKER_USER}/online-judge-backend:latest \
+                            .
+
+                        docker build \
+                            -t ${DOCKER_USER}/online-judge-frontend:${IMAGE_TAG} \
+                            -t ${DOCKER_USER}/online-judge-frontend:latest \
+                            --build-arg VITE_API_BASE=http://\$(cd terraform && terraform output -raw ec2_public_ip 2>/dev/null || echo localhost):3000 \
+                            ./frontend
+                    """
+                }
+            }
+        }
+
+        // ================================================================
+        // Stage 5: Push to Docker Hub
+        // Uses the dockerhub-creds credential (username/password type).
+        // DOCKERHUB_USR and DOCKERHUB_PSW are auto-created by Jenkins
+        // from the credentials() binding above.
+        // ================================================================
+        stage('Push to Docker Hub') {
+            steps {
+                sh """
+                    echo "${DOCKERHUB_PSW}" | docker login -u "${DOCKERHUB_USR}" --password-stdin
+
+                    docker push ${DOCKER_USER}/online-judge-backend:${IMAGE_TAG}
+                    docker push ${DOCKER_USER}/online-judge-backend:latest
+
+                    docker push ${DOCKER_USER}/online-judge-frontend:${IMAGE_TAG}
+                    docker push ${DOCKER_USER}/online-judge-frontend:latest
+                """
             }
         }
 
@@ -164,16 +170,22 @@ ENVFILE
 
     post {
         success {
-            sh """
-                EC2_IP=\$(cd terraform && terraform output -raw ec2_public_ip 2>/dev/null || echo 'unknown')
-                echo ""
-                echo "=========================================="
-                echo "  ✅ DEPLOYMENT SUCCESSFUL"
-                echo "  Frontend: http://\${EC2_IP}:5173"
-                echo "  Backend:  http://\${EC2_IP}:3000"
-                echo "  Health:   http://\${EC2_IP}:3000/health"
-                echo "=========================================="
-            """
+            withEnv([
+                "AWS_ACCESS_KEY_ID=${AWS_CREDS_USR}",
+                "AWS_SECRET_ACCESS_KEY=${AWS_CREDS_PSW}",
+                "AWS_DEFAULT_REGION=ap-south-1"
+            ]) {
+                sh """
+                    EC2_IP=\$(cd terraform && terraform output -raw ec2_public_ip 2>/dev/null || echo 'unknown')
+                    echo ""
+                    echo "=========================================="
+                    echo "  ✅ DEPLOYMENT SUCCESSFUL"
+                    echo "  Frontend: http://\${EC2_IP}:5173"
+                    echo "  Backend:  http://\${EC2_IP}:3000"
+                    echo "  Health:   http://\${EC2_IP}:3000/health"
+                    echo "=========================================="
+                """
+            }
         }
         failure {
             echo '❌ Pipeline failed. Check the stage logs above for details.'
