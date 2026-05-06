@@ -74,7 +74,19 @@ Add these 5 credentials in Jenkins (Manage Jenkins → Credentials → Global):
 | `aws-creds` | Username/Password | AWS Access Key ID + Secret Key |
 | `ec2-ssh-key` | Secret file | Upload `online-judge-key.pem` |
 
-### Step 7: Ngrok + GitHub Webhook
+### Step 7: Create Jenkins Pipeline Job
+1. In the Jenkins Dashboard, click **New Item**.
+2. Name it `online-judge-pipeline`, select **Pipeline**, and click **OK**.
+3. Under **Build Triggers**, check the box for **GitHub hook trigger for GITScm polling**.
+4. Under the **Pipeline** section:
+   - **Definition**: Select `Pipeline script from SCM`
+   - **SCM**: Select `Git`
+   - **Repository URL**: Your GitHub repository URL (e.g., `https://github.com/vishwajitsarnobat/devops-online-judge.git`)
+   - **Branch Specifier**: `*/main`
+   - **Script Path**: `Jenkinsfile`
+5. Click **Save**.
+
+### Step 8: Ngrok + GitHub Webhook
 ```bash
 ngrok http 8080
 # Copy the HTTPS URL (e.g. https://abc123.ngrok-free.app)
@@ -84,5 +96,5 @@ Then in GitHub → repo → Settings → Webhooks → Add:
 - Content type: `application/json`
 - Events: Just the push event
 
-### Step 8: Run!
+### Step 9: Run!
 Push any commit to `main` and watch Jenkins run the full pipeline.
