@@ -58,6 +58,12 @@ docs/_build/
 *.zip
 *.tar.gz
 
+# Terraform
+terraform/.terraform/
+terraform/*.tfstate
+terraform/*.tfstate.backup
+terraform/.terraform.lock.hcl
+
 # Ansible local/deployment secrets
 inventory.ini
 *.pem

@@ -1,84 +1,176 @@
 ---
-- name: Deploy online-judge locally
-  hosts: local
+# deploy.yml — Ansible playbook for deploying to a remote EC2 instance.
+# Called by Jenkins after Terraform has provisioned the server.
+#
+# Expects:
+#   - inventory.ini with [webservers] group pointing to EC2 IP
+#   - Extra vars: docker_user, image_tag, supabase_url, supabase_key
+
+- name: Deploy Online Judge to EC2
+  hosts: webservers
   become: true
+
   vars:
-    app_dir: /home/vishwajit/online-judge
-    deploy_user: vishwajit
-    repo_url: https://github.com/vishwajitsarnobat/devops-online-judge.git
-    repo_branch: main
+    app_dir: /opt/online-judge
+    docker_user: "{{ docker_user | default('vishwajitsarnobat') }}"
+    image_tag: "{{ image_tag | default('latest') }}"
 
   tasks:
-    - name: Ensure base packages are present
-      dnf:
-        name:
-          - git
-          - podman
-          - podman-docker
-          - podman-compose
-          - python3
-        state: present
+    # ------------------------------------------------------------------
+    # 1. Wait for the server to be ready (cloud-init may still be running)
+    # ------------------------------------------------------------------
+    - name: Wait for cloud-init to finish
+      command: cloud-init status --wait
+      changed_when: false
 
-    - name: Ensure Podman socket is enabled for deploy user
-      become: true
-      become_user: "{{ deploy_user }}"
-      systemd:
-        name: podman.socket
-        scope: user
-        enabled: true
-        state: started
+    # ------------------------------------------------------------------
+    # 2. Ensure Docker is installed and running
+    #    (user_data should have done this, but this is idempotent safety)
+    # ------------------------------------------------------------------
+    - name: Check if Docker is installed
+      command: docker --version
+      register: docker_check
+      ignore_errors: true
+      changed_when: false
 
-    - name: Ensure Docker socket symlink exists
+    - name: Install Docker if missing
+      when: docker_check.rc != 0
+      block:
+        - name: Install prerequisites
+          apt:
+            name: [ca-certificates, curl, gnupg]
+            state: present
+            update_cache: true
+
+        - name: Add Docker GPG key
+          shell: |
+            install -m 0755 -d /etc/apt/keyrings
+            curl -fsSL https://download.docker.com/linux/ubuntu/gpg \
+              | gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+            chmod a+r /etc/apt/keyrings/docker.gpg
+          args:
+            creates: /etc/apt/keyrings/docker.gpg
+
+        - name: Add Docker repository
+          shell: |
+            echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] \
+              https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" \
+              > /etc/apt/sources.list.d/docker.list
+          args:
+            creates: /etc/apt/sources.list.d/docker.list
+
+        - name: Install Docker packages
+          apt:
+            name:
+              - docker-ce
+              - docker-ce-cli
+              - containerd.io
+              - docker-compose-plugin
+            state: present
+            update_cache: true
+
+        - name: Add ubuntu user to docker group
+          user:
+            name: ubuntu
+            groups: docker
+            append: true
+
+        - name: Start and enable Docker
+          systemd:
+            name: docker
+            state: started
+            enabled: true
+
+    # ------------------------------------------------------------------
+    # 3. Create application directory
+    # ------------------------------------------------------------------
+    - name: Create app directory
       file:
-        src: "/run/user/{{ deploy_user_uid }}/podman/podman.sock"
-        dest: /var/run/docker.sock
-        state: link
-        force: true
-      vars:
-        deploy_user_uid: "{{ ansible_facts['user_uid'] | default(1000) }}"
+        path: "{{ app_dir }}"
+        state: directory
+        owner: ubuntu
+        group: ubuntu
+        mode: "0755"
 
-    - name: Pull latest code from GitHub
-      become: true
-      become_user: "{{ deploy_user }}"
-      git:
-        repo: "{{ repo_url }}"
-        dest: "{{ app_dir }}"
-        version: "{{ repo_branch }}"
-        force: true
-
-    - name: Inject environment variables
+    # ------------------------------------------------------------------
+    # 4. Copy docker-compose.prod.yml to the server
+    # ------------------------------------------------------------------
+    - name: Copy production compose file
       copy:
-        src: ./.env
-        dest: "{{ app_dir }}/.env"
-        owner: "{{ deploy_user }}"
-        group: "{{ deploy_user }}"
-        mode: '0600'
+        src: ./docker-compose.prod.yml
+        dest: "{{ app_dir }}/docker-compose.yml"
+        owner: ubuntu
+        group: ubuntu
+        mode: "0644"
 
-    - name: Pull runtime images
+    # ------------------------------------------------------------------
+    # 5. Create .env file on the server
+    # ------------------------------------------------------------------
+    - name: Create .env file
+      copy:
+        dest: "{{ app_dir }}/.env"
+        owner: ubuntu
+        group: ubuntu
+        mode: "0600"
+        content: |
+          SUPABASE_URL={{ supabase_url }}
+          SUPABASE_SERVICE_ROLE_KEY={{ supabase_key }}
+          PORT=3000
+          DOCKER_USER={{ docker_user }}
+          IMAGE_TAG={{ image_tag }}
+
+    # ------------------------------------------------------------------
+    # 6. Log in to Docker Hub (so we can pull private images if needed)
+    # ------------------------------------------------------------------
+    - name: Log in to Docker Hub
+      command: docker login -u {{ docker_hub_user }} -p {{ docker_hub_pass }}
       become: true
-      become_user: "{{ deploy_user }}"
-      command: "podman pull docker.io/library/{{ item }}"
+      become_user: ubuntu
+      no_log: true
+      changed_when: false
+      when: docker_hub_user is defined and docker_hub_pass is defined
+
+    # ------------------------------------------------------------------
+    # 7. Pull latest images and restart containers
+    # ------------------------------------------------------------------
+    - name: Pull latest images
+      command: docker compose pull
+      args:
+        chdir: "{{ app_dir }}"
+      become: true
+      become_user: ubuntu
+      changed_when: true
+
+    - name: Start / restart containers
+      command: docker compose up -d --remove-orphans
+      args:
+        chdir: "{{ app_dir }}"
+      become: true
+      become_user: ubuntu
+      changed_when: true
+
+    # ------------------------------------------------------------------
+    # 8. Pull code runner images (needed for code execution)
+    # ------------------------------------------------------------------
+    - name: Pull code runner images
+      command: "docker pull {{ item }}"
       loop:
         - python:3.10-slim
         - gcc:latest
+      become: true
+      become_user: ubuntu
       changed_when: true
 
-    - name: Stop existing containers
+    # ------------------------------------------------------------------
+    # 9. Health check — wait for backend to respond
+    # ------------------------------------------------------------------
+    - name: Wait for backend health endpoint
+      uri:
+        url: "http://localhost:3000/health"
+        status_code: 200
+      register: health_result
+      until: health_result.status == 200
+      retries: 12
+      delay: 5
       become: true
-      become_user: "{{ deploy_user }}"
-      shell: |
-        cd "{{ app_dir }}"
-        podman-compose down || true
-      args:
-        executable: /bin/bash
-      ignore_errors: true
-
-    - name: Start application with Podman Compose
-      become: true
-      become_user: "{{ deploy_user }}"
-      shell: |
-        set -e
-        cd "{{ app_dir }}"
-        podman-compose up --build -d
-      args:
-        executable: /bin/bash
+      become_user: ubuntu
