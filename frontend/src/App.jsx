@@ -20,7 +20,7 @@ export default function App() {
       <nav className="navbar">
         <div className="brand">
           <Terminal size={28} color="#ffffffff" />
-          Code-Judge
+          Judge-Code
         </div>
         <div className="nav-links">
           <button
